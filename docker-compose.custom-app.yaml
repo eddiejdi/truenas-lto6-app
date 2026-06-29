@@ -1,0 +1,55 @@
+# Custom App (caminho de validação imediato — TrueNAS → Apps → Install via YAML).
+# Substitua ${...} pelos valores reais antes de colar na UI, ou use como referência.
+# Este é o caminho de fallback do plano; o caminho primário é o app de catálogo (Discover).
+services:
+  lto6-control-plane:
+    image: ghcr.io/eddiejdi/lto6-control-plane:1.0.0
+    container_name: lto6-control-plane
+    restart: unless-stopped
+    # control-plane: precisa do host para montar LTFS e gerenciar systemd
+    privileged: true
+    network_mode: host
+    pid: host
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RAWIO
+    devices:
+      - /dev/fuse:/dev/fuse
+      - /dev/sg4:/dev/sg4       # ${DRIVE_SG}
+      - /dev/nst1:/dev/nst1     # ${DRIVE_NST}
+    environment:
+      LTFS_DEVICE: /dev/sg4
+      LTFS_TAPE_DEVICE: /dev/nst1
+      LTFS_MOUNT_POINT: /mnt/tape/lto6
+      LTFS_SERVICE: ltfs-lto6.service
+      BUFFER_PATH: /mnt/tank/pretape/lto6-cache      # PRÉ-REQUISITO
+      BUFFER_MIN_FREE_GIB: "30"
+      BUFFER_GATE_PCT: "80"
+      BUFFER_KILL_PCT: "88"
+      INSTALL_HOST_UNITS: "true"
+      AUTO_MOUNT_ON_INSERT: "true"
+      AUTO_EJECT_ON_BUTTON: "true"
+      ORCHESTRATOR_PORT: "9877"
+      EXPORTER_PORT: "9125"
+      TELEGRAM_BOT_TOKEN: ""        # informe via secret, não versione
+      TELEGRAM_CHAT_ID: ""
+    volumes:
+      # buffer pré-tape — rshared para enxergar o mount FUSE feito no host
+      - type: bind
+        source: /mnt/tank/pretape/lto6-cache
+        target: /mnt/tank/pretape/lto6-cache
+        bind:
+          propagation: rshared
+      - type: bind
+        source: /mnt/tape/lto6
+        target: /mnt/tape/lto6
+        bind:
+          propagation: rshared
+      # acesso ao systemd do host para instalar/gerenciar units
+      - /run/systemd:/run/systemd
+      - /etc/systemd/system:/etc/systemd/system
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9877/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

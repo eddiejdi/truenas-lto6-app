@@ -1,0 +1,53 @@
+name: Build & Push Control-Plane Image
+
+on:
+  push:
+    paths:
+      - "images/lto6-control-plane/**"
+      - "host-assets/**"
+      - ".github/workflows/build-image.yml"
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: eddiejdi/lto6-control-plane
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derivar tag da versão (app.yaml)
+        id: ver
+        run: |
+          V=$(grep -E '^version:' ix-dev/stable/lto6-tape/app.yaml | awk '{print $2}')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Versão do app: $V"
+
+      - name: Preparar contexto de build
+        run: |
+          # O Dockerfile espera host-assets/ no contexto da imagem.
+          cp -r host-assets images/lto6-control-plane/host-assets
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/lto6-control-plane
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:latest

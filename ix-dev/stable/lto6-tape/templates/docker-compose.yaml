@@ -1,0 +1,68 @@
+{# LTO-6 Tape Manager — control-plane. Render no padrão do catálogo TrueNAS. #}
+{% set tpl = ix_lib.base.render.Render(values) %}
+
+{% set c1 = tpl.add_container(values.consts.app_name, "image") %}
+
+{# control-plane: acesso ao host para montar LTFS e gerenciar systemd #}
+{% do c1.set_privileged(true) %}
+{% do c1.set_network_mode("host") %}
+{% do c1.set_pid_mode("host") %}
+{% do c1.restart.set_policy("unless-stopped") %}
+
+{# devices SCSI/FUSE #}
+{% do c1.devices.add_device("/dev/fuse", "/dev/fuse") %}
+{% do c1.devices.add_device(values.drive.sg_device, values.drive.sg_device) %}
+{% do c1.devices.add_device(values.drive.nst_device, values.drive.nst_device) %}
+
+{# capabilities de hardware #}
+{% do c1.add_caps(["SYS_ADMIN", "SYS_RAWIO"]) %}
+
+{# buffer pré-tape (obrigatório) + mount point — rshared p/ ver o mount FUSE do host #}
+{% do c1.add_storage(values.buffer.host_path, {
+  "type": "host_path",
+  "host_path_config": {"path": values.buffer.host_path, "propagation": "rshared"}
+}) %}
+{% do c1.add_storage(values.orchestration.mount_point, {
+  "type": "host_path",
+  "host_path_config": {"path": values.orchestration.mount_point, "propagation": "rshared"}
+}) %}
+{% do c1.add_storage("/run/systemd", {
+  "type": "host_path", "host_path_config": {"path": "/run/systemd"}
+}) %}
+
+{# ambiente — segredos vêm do questions.yaml (private), nunca do git #}
+{% do c1.environment.add_env("LTFS_DEVICE", values.drive.sg_device) %}
+{% do c1.environment.add_env("LTFS_TAPE_DEVICE", values.drive.nst_device) %}
+{% do c1.environment.add_env("LTFS_MOUNT_POINT", values.orchestration.mount_point) %}
+{% do c1.environment.add_env("LTFS_SERVICE", "ltfs-%s.service" | format(values.drive.id)) %}
+{% do c1.environment.add_env("BUFFER_PATH", values.buffer.host_path) %}
+{% do c1.environment.add_env("BUFFER_MIN_FREE_GIB", values.buffer.min_free_gib) %}
+{% do c1.environment.add_env("BUFFER_GATE_PCT", values.buffer.gate_pct) %}
+{% do c1.environment.add_env("BUFFER_KILL_PCT", values.buffer.kill_pct) %}
+{% do c1.environment.add_env("INSTALL_HOST_UNITS", values.orchestration.install_host_units) %}
+{% do c1.environment.add_env("AUTO_MOUNT_ON_INSERT", values.orchestration.auto_mount_on_insert) %}
+{% do c1.environment.add_env("AUTO_EJECT_ON_BUTTON", values.orchestration.auto_eject_on_button) %}
+{% do c1.environment.add_env("LTFS_USAGE_WINDOW_START", values.orchestration.usage_window_start) %}
+{% do c1.environment.add_env("LTFS_USAGE_WINDOW_END", values.orchestration.usage_window_end) %}
+{% do c1.environment.add_env("ORCHESTRATOR_PORT", values.network.orchestrator_port) %}
+{% do c1.environment.add_env("EXPORTER_PORT", values.network.exporter_port) %}
+{% do c1.environment.add_env("TELEGRAM_BOT_TOKEN", values.notifications.telegram_bot_token) %}
+{% do c1.environment.add_env("TELEGRAM_CHAT_ID", values.notifications.telegram_chat_id) %}
+
+{# recursos #}
+{% do c1.resources.set_profile(values.resources) %}
+
+{# healthcheck no orchestrator API #}
+{% do c1.healthcheck.set_custom_test([
+  "CMD", "curl", "-fsS",
+  "http://localhost:%d/health" | format(values.network.orchestrator_port)
+]) %}
+
+{# portais #}
+{% do tpl.portals.add_portal({
+  "port": values.network.orchestrator_port,
+  "scheme": "http",
+  "name": "Orchestrator API"
+}) %}
+
+{{ tpl.render() | tojson }}

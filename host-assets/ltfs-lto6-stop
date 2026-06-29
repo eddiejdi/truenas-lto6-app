@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+MOUNTPOINT=${LTFS_MOUNT_POINT:-/mnt/tape/lto6}
+PIDFILE=${LTFS_PIDFILE:-/run/ltfs-lto6.pid}
+LOGFILE=${LTFS_LOGFILE:-/var/log/ltfs-lto6.log}
+
+log() {
+    echo "$(date -Iseconds) [ltfs-stop] $*" | tee -a "$LOGFILE"
+}
+
+if findmnt "$MOUNTPOINT" >/dev/null 2>&1; then
+    log "Sincronizando dados LTFS em $MOUNTPOINT..."
+    sync; sleep 2
+    log "Desmontando LTFS ($MOUNTPOINT)..."
+    if command -v fusermount >/dev/null 2>&1; then
+        fusermount -u "$MOUNTPOINT" 2>>"$LOGFILE" || fusermount -u -z "$MOUNTPOINT" 2>>"$LOGFILE" || true
+    else
+        umount "$MOUNTPOINT" 2>>"$LOGFILE" || umount -l "$MOUNTPOINT" 2>>"$LOGFILE" || true
+    fi
+    sleep 2
+    log "LTFS desmontado."
+else
+    log "LTFS ja estava desmontado."
+fi
+
+if [ -f "$PIDFILE" ]; then
+    ltfs_pid=$(cat "$PIDFILE")
+    if kill -0 "$ltfs_pid" 2>/dev/null; then
+        log "Aguardando processo ltfs PID=$ltfs_pid encerrar..."
+        kill "$ltfs_pid" 2>/dev/null || true
+        sleep 3
+        kill -9 "$ltfs_pid" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+fi
+log "ltfs-lto6-stop concluido."

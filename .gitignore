@@ -1,0 +1,12 @@
+# Build context copiado pelo CI
+images/lto6-control-plane/host-assets/
+
+# Python
+__pycache__/
+*.pyc
+
+# Segredos — proteção extra (nunca devem existir, mas garantimos)
+*.secret
+*token*
+.env
+host-assets/env/*.real.env

@@ -1,0 +1,28 @@
+[Unit]
+Description=LTFS Button Watch — auto-mount/eject via orchestrator
+Documentation=man:ltfs(1)
+After=network.target local-fs.target
+Wants=network.target
+# Não conflita com ltfs-lto6.service: o daemon usa o orchestrator que já gerencia conflitos
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ltfs-lto6
+EnvironmentFile=-/etc/default/ltfs-recovery
+ExecStart=/usr/bin/python3 /var/db/ltfs-tools/ltfs_button_watch.py
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=180
+
+# Precisa de acesso root a /dev/sg*, /dev/nst* e executar subprocessos
+ProtectHome=yes
+NoNewPrivileges=no
+PrivateTmp=no
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ltfs-button-watch
+
+[Install]
+WantedBy=multi-user.target

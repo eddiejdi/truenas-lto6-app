@@ -1,0 +1,17 @@
+{
+  "label": "RPA4ALL-LTO",
+  "preferred_trains": ["stable"],
+  "trains": {
+    "stable": {
+      "lto6-tape": {
+        "name": "lto6-tape",
+        "categories": ["storage", "backup"],
+        "app_readme": "Gerenciamento de fitas LTO-6 (LTFS) no TrueNAS com buffer pré-tape obrigatório e dashboards.",
+        "location": "ix-dev/stable/lto6-tape",
+        "healthy": true,
+        "latest_version": "1.0.0",
+        "latest_app_version": "1.0.0"
+      }
+    }
+  }
+}

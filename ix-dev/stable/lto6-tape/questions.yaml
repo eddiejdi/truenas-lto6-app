@@ -1,0 +1,195 @@
+groups:
+  - name: Drive Configuration
+    description: Seleção do drive LTO e devices SCSI
+  - name: Pre-Tape Buffer
+    description: Área de buffer obrigatória antes da gravação em fita (pré-requisito)
+  - name: Orchestration
+    description: Mount point, janela de uso e self-heal
+  - name: Notifications
+    description: Telegram para eventos de mount/eject/recovery
+  - name: Network Configuration
+    description: Portas do orchestrator API e do exporter Prometheus
+  - name: Resources Configuration
+    description: Limites de CPU e memória
+
+questions:
+  # ── Drive ────────────────────────────────────────────────────────────
+  - variable: drive
+    label: ""
+    group: Drive Configuration
+    schema:
+      type: dict
+      attrs:
+        - variable: id
+          label: Drive
+          description: Identificador lógico do drive (define env files e mount point default).
+          schema:
+            type: string
+            required: true
+            default: lto6
+            enum:
+              - value: lto6
+                description: LTO-6 (sg4 / nst1)
+              - value: lto6b
+                description: LTO-6b (sg2 / nst0)
+        - variable: sg_device
+          label: SCSI generic device
+          description: Device /dev/sgN do drive (use `lsscsi -g` no host).
+          schema:
+            type: string
+            required: true
+            default: /dev/sg4
+        - variable: nst_device
+          label: Tape device (no-rewind)
+          description: Device /dev/nstN correspondente ao drive.
+          schema:
+            type: string
+            required: true
+            default: /dev/nst1
+
+  # ── Buffer pré-tape (PRÉ-REQUISITO OBRIGATÓRIO) ──────────────────────
+  - variable: buffer
+    label: ""
+    group: Pre-Tape Buffer
+    schema:
+      type: dict
+      attrs:
+        - variable: host_path
+          label: Dataset de buffer pré-tape
+          description: |
+            Host path do dataset de buffer (ex: /mnt/tank/pretape/lto6-cache).
+            OBRIGATÓRIO — o deploy falha se não for informado ou não existir.
+          schema:
+            type: hostpath
+            required: true
+        - variable: min_free_gib
+          label: Espaço livre mínimo (GiB)
+          description: Gate — o mount é bloqueado se o buffer cair abaixo deste valor.
+          schema:
+            type: int
+            required: true
+            default: 30
+            min: 10
+        - variable: gate_pct
+          label: Gate de uso (%)
+          description: Acima deste percentual, novos drains são bloqueados.
+          schema:
+            type: int
+            default: 80
+            min: 50
+            max: 95
+        - variable: kill_pct
+          label: Abort de uso (%)
+          description: Acima deste percentual, gravações em andamento são abortadas.
+          schema:
+            type: int
+            default: 88
+            min: 60
+            max: 99
+
+  # ── Orquestração ─────────────────────────────────────────────────────
+  - variable: orchestration
+    label: ""
+    group: Orchestration
+    schema:
+      type: dict
+      attrs:
+        - variable: mount_point
+          label: Mount point LTFS no host
+          schema:
+            type: hostpath
+            required: true
+            default: /mnt/tape/lto6
+        - variable: usage_window_start
+          label: Início da janela de uso (HH:MM)
+          schema:
+            type: string
+            default: "02:00"
+        - variable: usage_window_end
+          label: Fim da janela de uso (HH:MM)
+          schema:
+            type: string
+            default: "04:00"
+        - variable: install_host_units
+          label: Instalar units systemd no host (control-plane)
+          description: Instala ltfs-lto6.service e ltfs-button-watch.service no host via nsenter.
+          schema:
+            type: boolean
+            default: true
+        - variable: auto_mount_on_insert
+          label: Auto-mount ao inserir fita
+          schema:
+            type: boolean
+            default: true
+        - variable: auto_eject_on_button
+          label: Auto-eject ao pressionar botão físico
+          schema:
+            type: boolean
+            default: true
+
+  # ── Notificações ─────────────────────────────────────────────────────
+  - variable: notifications
+    label: ""
+    group: Notifications
+    schema:
+      type: dict
+      attrs:
+        - variable: telegram_bot_token
+          label: Telegram Bot Token
+          description: Opcional. Armazenado como secret — nunca versionado.
+          schema:
+            type: string
+            default: ""
+            private: true
+        - variable: telegram_chat_id
+          label: Telegram Chat ID
+          schema:
+            type: string
+            default: ""
+
+  # ── Rede ─────────────────────────────────────────────────────────────
+  - variable: network
+    label: ""
+    group: Network Configuration
+    schema:
+      type: dict
+      attrs:
+        - variable: orchestrator_port
+          label: Porta do Orchestrator API
+          schema:
+            type: int
+            default: 9877
+            min: 1024
+            max: 65535
+        - variable: exporter_port
+          label: Porta do exporter Prometheus
+          schema:
+            type: int
+            default: 9125
+            min: 1024
+            max: 65535
+
+  # ── Recursos ─────────────────────────────────────────────────────────
+  - variable: resources
+    label: ""
+    group: Resources Configuration
+    schema:
+      type: dict
+      attrs:
+        - variable: limits
+          label: Limites
+          schema:
+            type: dict
+            attrs:
+              - variable: cpus
+                label: CPUs
+                schema:
+                  type: int
+                  default: 2
+                  min: 1
+              - variable: memory
+                label: Memória (MB)
+                schema:
+                  type: int
+                  default: 1024
+                  min: 256

@@ -1,0 +1,141 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "title": "LTO-6 Tape Manager",
+  "uid": "lto6-tape-manager",
+  "tags": ["tape", "lto", "ltfs", "backup"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "drive",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(lto6_app_mount_up, drive)",
+        "refresh": 2,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Buffer Pré-Tape (pré-requisito)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "gauge",
+      "title": "Buffer — Uso (%)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_buffer_pct_used{drive=\"$drive\"}", "legendFormat": "{{dataset}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 80 },
+            { "color": "red", "value": 88 }
+          ] }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Buffer — Livre",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_buffer_bytes_free{drive=\"$drive\"}" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "type": "stat",
+      "title": "Gate de Buffer OK",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_buffer_gate_ok{drive=\"$drive\"}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "BLOQUEADO", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tendência — Uso do Buffer (%)",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_buffer_pct_used{drive=\"$drive\"}", "legendFormat": "{{dataset}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 80 },
+            { "color": "red", "value": 88 }
+          ] }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Estado do Drive e Mount",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "stat",
+      "title": "Mount LTFS",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_mount_up{drive=\"$drive\"}" }],
+      "fieldConfig": { "defaults": { "mappings": [
+        { "type": "value", "options": { "0": { "text": "DESMONTADO", "color": "red" } } },
+        { "type": "value", "options": { "1": { "text": "MONTADO", "color": "green" } } }
+      ] } }
+    },
+    {
+      "type": "stat",
+      "title": "Serviço ltfs-*.service",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_service_up{drive=\"$drive\"}" }],
+      "fieldConfig": { "defaults": { "mappings": [
+        { "type": "value", "options": { "0": { "text": "INATIVO", "color": "red" } } },
+        { "type": "value", "options": { "1": { "text": "ATIVO", "color": "green" } } }
+      ] } }
+    },
+    {
+      "type": "stat",
+      "title": "Button-Watch",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_button_watch_up" }],
+      "fieldConfig": { "defaults": { "mappings": [
+        { "type": "value", "options": { "0": { "text": "PARADO", "color": "red" } } },
+        { "type": "value", "options": { "1": { "text": "ATIVO", "color": "green" } } }
+      ] } }
+    },
+    {
+      "type": "gauge",
+      "title": "Temperatura do Drive (°C)",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "lto6_app_drive_temp_celsius{drive=\"$drive\"}" }],
+      "fieldConfig": { "defaults": {
+        "unit": "celsius", "min": 0, "max": 70,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "yellow", "value": 45 },
+          { "color": "red", "value": 55 }
+        ] }
+      } }
+    }
+  ]
+}

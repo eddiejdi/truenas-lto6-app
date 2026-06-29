@@ -1,0 +1,12 @@
+categories:
+- storage
+- backup
+icon_url: https://raw.githubusercontent.com/eddiejdi/truenas-lto6-app/main/ix-dev/stable/lto6-tape/icon.png
+tags:
+- storage
+- backup
+- tape
+- lto
+- ltfs
+- archive
+screenshots: []

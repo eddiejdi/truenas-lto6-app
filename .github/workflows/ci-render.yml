@@ -1,0 +1,87 @@
+name: CI — Render & Lint
+
+on:
+  push:
+    paths:
+      - "ix-dev/**"
+      - "catalog.json"
+      - "grafana/**"
+      - ".github/workflows/ci-render.yml"
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: python -m pip install pyyaml
+
+      - name: Validar YAML do catálogo
+        run: |
+          python - <<'PY'
+          import yaml, glob, sys
+          files = [
+            "catalog.json",
+            "ix-dev/stable/lto6-tape/item.yaml",
+            "ix-dev/stable/lto6-tape/app.yaml",
+            "ix-dev/stable/lto6-tape/questions.yaml",
+            "ix-dev/stable/lto6-tape/ix_values.yaml",
+          ]
+          import json
+          json.load(open("catalog.json"))
+          for f in files[1:]:
+            yaml.safe_load(open(f))
+          print("YAML/JSON do catálogo OK:", files)
+          PY
+
+      - name: Validar questions.yaml — buffer é obrigatório
+        run: |
+          python - <<'PY'
+          import yaml
+          q = yaml.safe_load(open("ix-dev/stable/lto6-tape/questions.yaml"))
+          def find(attrs, name):
+              for a in attrs:
+                  if a["variable"] == name:
+                      return a
+              return None
+          buf = find(q["questions"], "buffer")
+          assert buf, "grupo buffer ausente"
+          host_path = find(buf["schema"]["attrs"], "host_path")
+          assert host_path["schema"].get("required") is True, "buffer.host_path DEVE ser required"
+          print("OK — buffer pré-tape é pré-requisito obrigatório")
+          PY
+
+      - name: Validar dashboard Grafana
+        run: |
+          python - <<'PY'
+          import json
+          d = json.load(open("grafana/dashboards/lto6-tape-manager.json"))
+          assert d["uid"] == "lto6-tape-manager"
+          titles = [p.get("title") for p in d["panels"]]
+          assert any("Buffer" in (t or "") for t in titles), "dashboard sem painel de buffer"
+          print("OK — dashboard com painéis:", titles)
+          PY
+
+      - name: Lint Python (sintaxe)
+        run: |
+          python -m py_compile \
+            images/lto6-control-plane/rootfs/orchestrator_api.py \
+            images/lto6-control-plane/rootfs/exporter.py \
+            images/lto6-control-plane/rootfs/ltfs_button_watch.py
+          echo "py_compile OK"
+
+      - name: Lint shell
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          bash -n images/lto6-control-plane/rootfs/installer.sh
+          bash -n images/lto6-control-plane/rootfs/supervisor.sh
+          shellcheck -S warning images/lto6-control-plane/rootfs/*.sh || true

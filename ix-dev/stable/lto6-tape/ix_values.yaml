@@ -1,0 +1,41 @@
+images:
+  image:
+    repository: ghcr.io/eddiejdi/lto6-control-plane
+    tag: 1.0.0
+
+consts:
+  app_name: lto6-tape
+  perms_container_name: lto6-perms
+
+# Defaults aplicados quando o usuário não sobrescreve via questions.yaml.
+drive:
+  id: lto6
+  sg_device: /dev/sg4
+  nst_device: /dev/nst1
+
+buffer:
+  host_path: ""
+  min_free_gib: 30
+  gate_pct: 80
+  kill_pct: 88
+
+orchestration:
+  mount_point: /mnt/tape/lto6
+  usage_window_start: "02:00"
+  usage_window_end: "04:00"
+  install_host_units: true
+  auto_mount_on_insert: true
+  auto_eject_on_button: true
+
+notifications:
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+
+network:
+  orchestrator_port: 9877
+  exporter_port: 9125
+
+resources:
+  limits:
+    cpus: 2
+    memory: 1024

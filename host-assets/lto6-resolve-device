@@ -1,0 +1,15 @@
+#!/bin/sh
+# Resolve sg/nst para drive lto6 pelo serial HUJ5485716 (robusto a re-enumeração SCSI)
+TARGET_SERIAL='HUJ5485716'
+result=$(lsscsi -g 2>/dev/null | grep tape | while IFS= read -r line; do
+    sg=$(echo "$line" | awk '{print $NF}')
+    [ -e "$sg" ] || continue
+    serial=$(sg_inq "$sg" 2>/dev/null | awk '/Unit serial/{print $NF}')
+    if [ "$serial" = "$TARGET_SERIAL" ]; then
+        st=$(echo "$line" | awk '{print $(NF-1)}' | sed 's|/dev/st|/dev/nst|')
+        printf 'DEV=%s\nREWIND_DEV=%s\n' "$sg" "${st:-/dev/nst1}"
+        break
+    fi
+done)
+[ -n "$result" ] && printf '%s\n' "$result" && exit 0
+exit 1

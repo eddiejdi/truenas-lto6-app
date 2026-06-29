@@ -1,0 +1,50 @@
+annotations:
+  min_scale_version: 24.10.0
+app_version: 1.0.0
+capabilities:
+- description: LTFS precisa montar/desmontar o filesystem FUSE no host.
+  name: SYS_ADMIN
+- description: Acesso aos devices SCSI da fita (/dev/sg*, /dev/nst*) e ejeção mecânica.
+  name: SYS_RAWIO
+categories:
+- storage
+- backup
+changelog_url: https://github.com/eddiejdi/truenas-lto6-app/blob/main/ix-dev/stable/lto6-tape/CHANGELOG.md
+date_added: '2026-06-29'
+description: >-
+  Gerenciamento e suporte de fitas LTO-6 (LTFS) no TrueNAS — mount/eject orquestrado,
+  auto-mount por inserção e auto-eject por botão físico, com área de buffer pré-tape
+  obrigatória e dashboards de monitoramento.
+home: https://github.com/eddiejdi/truenas-lto6-app
+host_mounts:
+- description: Device SCSI generic do drive LTO
+  host_path: /dev/sg4
+- description: Device de fita (no-rewind) do drive LTO
+  host_path: /dev/nst1
+icon: https://raw.githubusercontent.com/eddiejdi/truenas-lto6-app/main/ix-dev/stable/lto6-tape/icon.png
+keywords:
+- tape
+- lto
+- ltfs
+- backup
+- archive
+lib_version: 1.0.0
+maintainers:
+- email: edenilson.adm@gmail.com
+  name: eddiejdi
+  url: https://github.com/eddiejdi
+name: lto6-tape
+run_as_context:
+- description: >-
+    O container roda como root e privileged — control-plane que monta LTFS no host
+    e gerencia units systemd. Necessário por acesso a hardware SCSI/FC e FUSE.
+  gid: 0
+  group_name: root
+  uid: 0
+  user_name: root
+screenshots: []
+sources:
+- https://github.com/eddiejdi/truenas-lto6-app
+title: LTO-6 Tape Manager
+train: stable
+version: 1.0.0

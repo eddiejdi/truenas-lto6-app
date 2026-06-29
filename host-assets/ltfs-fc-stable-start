@@ -1,0 +1,134 @@
+#!/bin/sh
+set -eu
+
+# ── Orquestrador: adquire lock exclusivo antes de tocar qualquer device ──
+# Garante que nenhum outro processo (tape-safe-eject, selfheal, recovery)
+# acesse a fita simultaneamente durante o mount.
+ORCH_LOCK=${LTFS_ORCH_LOCK:-/run/lock/ltfs-tape-exclusive.lock}
+ORCH_LOCK_TIMEOUT=${LTFS_ORCH_TIMEOUT:-600}
+
+mkdir -p "$(dirname "$ORCH_LOCK")"
+exec 9>"$ORCH_LOCK"
+_elapsed=0
+while ! flock -n 9; do
+    if [ "$_elapsed" -ge "$ORCH_LOCK_TIMEOUT" ]; then
+        echo "$(date -Iseconds) [ltfs-start] ERRO: lock de fita não adquirido após ${ORCH_LOCK_TIMEOUT}s" >&2
+        exit 1
+    fi
+    echo "$(date -Iseconds) [ltfs-start] Aguardando lock de fita... (${_elapsed}s)" >&2
+    sleep 5
+    _elapsed=$((_elapsed + 5))
+done
+printf '{"pid":%d,"operation":"mount","started_at":"%s"}\n' "$$" "$(date -Iseconds)" >&9
+
+# Para serviços que podem concorrer com o mount. O timer do self-heal fica
+# armado; só a execução do service precisa ser contida pelo lock exclusivo.
+for _svc in tape-safe-eject.service lto6-selfheal.service \
+            ltfs-idle-unmount.timer ltfs-cache-flush.timer ltfs-udev-mount.service; do
+    if systemctl is-active --quiet "$_svc" 2>/dev/null; then
+        echo "$(date -Iseconds) [ltfs-start] Parando serviço concorrente: $_svc" >&2
+        systemctl stop "$_svc" 2>/dev/null || true
+    fi
+done
+# ── Fim do bloco de lock/preflight ────────────────────────────────────
+
+MOUNTPOINT=${LTFS_MOUNT_POINT:-/mnt/tape/lto6}
+WORKDIR=${LTFS_WORKDIR:-/var/lib/ltfs/work}
+LOGFILE=${LTFS_LOGFILE:-/var/log/ltfs-lto6.log}
+PIDFILE=${LTFS_PIDFILE:-/run/ltfs-lto6.pid}
+RESOLVER=${LTFS_DEVICE_RESOLVER:-/usr/local/sbin/lto6-resolve-device}
+STARTUP_TIMEOUT_SECONDS=${STARTUP_TIMEOUT_SECONDS:-420}
+POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-2}
+APPEND_ONLY_MODE=${LTFS_SCSI_APPEND_ONLY_MODE:-}
+LTFS_BIN=${LTFS_BIN:-}
+
+if [ -x "$RESOLVER" ] && [ -z "${LTO6_SG_DEV:-}" ]; then
+    if resolved="$($RESOLVER 2>/dev/null)"; then
+        eval "$resolved"
+    fi
+fi
+
+DEV=${DEV:-${LTFS_DEVICE:-${LTO6_SG_DEV:-/dev/sg0}}}
+REWIND_DEV=${REWIND_DEV:-${LTFS_TAPE_DEVICE:-${LTO6_ST_DEV:-/dev/st0}}}
+
+mkdir -p "$MOUNTPOINT" "$WORKDIR" /var/log
+
+if findmnt "$MOUNTPOINT" >/dev/null 2>&1; then
+    exit 0
+fi
+
+# ── Aguardar processo LTFS anterior liberar o device ─────────────────────────
+# Race condition: ao reiniciar após falha, o processo LTFS anterior pode ter
+# terminado mas o device SCSI ainda não foi liberado pelo kernel. Sem esta
+# espera, o novo mount acessa o device enquanto o anterior ainda o segura,
+# corrompendo a posição da fita (bug identificado 2026-05-20).
+_dev_wait=0
+_dev_wait_max=120
+while lsof "$DEV" 2>/dev/null | grep -q ltfs; do
+    if [ "$_dev_wait" -ge "$_dev_wait_max" ]; then
+        # O processo LTFS anterior está morto (FUSE crashou) mas ainda segura o
+        # device SCSI. Não há dados em buffer RAM — matar é seguro aqui.
+        _stale_pids=$(lsof -t "$DEV" 2>/dev/null | tr '\n' ' ')
+        echo "$(date -Iseconds) [ltfs-start] WARN: device $DEV ainda ocupado após ${_dev_wait_max}s; matando PIDs stale: $_stale_pids" >&2
+        if [ -n "$_stale_pids" ]; then
+            # shellcheck disable=SC2086
+            kill -TERM $_stale_pids 2>/dev/null || true
+            sleep 5
+            if lsof "$DEV" 2>/dev/null | grep -q ltfs; then
+                # shellcheck disable=SC2086
+                kill -KILL $_stale_pids 2>/dev/null || true
+                sleep 2
+            fi
+        fi
+        break
+    fi
+    echo "$(date -Iseconds) [ltfs-start] Aguardando processo LTFS anterior liberar $DEV... (${_dev_wait}s)" >&2
+    sleep 5
+    _dev_wait=$((_dev_wait + 5))
+done
+# ── Fim da espera pelo device ──────────────────────────────────────────────────
+
+find "$WORKDIR" -mindepth 1 -delete 2>/dev/null || true
+if command -v timeout >/dev/null 2>&1; then
+    timeout 15 mt -f "$REWIND_DEV" rewind >/dev/null 2>&1 || true
+else
+    mt -f "$REWIND_DEV" rewind >/dev/null 2>&1 || true
+fi
+if [ -z "$LTFS_BIN" ]; then
+    if [ -x /usr/local/ltfs-patched/bin/ltfs ]; then
+        LTFS_BIN=/usr/local/ltfs-patched/bin/ltfs
+    else
+        LTFS_BIN=/usr/local/bin/ltfs
+    fi
+fi
+if [ "${LTFS_BIN#/usr/local/ltfs-patched/}" != "$LTFS_BIN" ]; then
+    export LD_LIBRARY_PATH=/usr/local/ltfs-patched/lib:/usr/local/lib:${LD_LIBRARY_PATH:-}
+else
+    export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+fi
+set -- "$LTFS_BIN" "$MOUNTPOINT" -o devname="$DEV" -o work_directory="$WORKDIR" -o nonempty
+if [ -n "$APPEND_ONLY_MODE" ]; then
+    set -- "$@" -o "scsi_append_only_mode=$APPEND_ONLY_MODE"
+fi
+# O processo LTFS não pode herdar o lock exclusivo; caso contrário, um mount
+# já ativo prende o lock indefinidamente e bloqueia novos fluxos orquestrados.
+nohup sh -c 'exec 9>&-; exec "$@"' sh "$@" >>"$LOGFILE" 2>&1 &
+ltfs_pid=$!
+echo "$ltfs_pid" > "$PIDFILE"
+
+elapsed=0
+while [ "$elapsed" -lt "$STARTUP_TIMEOUT_SECONDS" ]; do
+    if findmnt "$MOUNTPOINT" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    if ! kill -0 "$ltfs_pid" 2>/dev/null; then
+        wait "$ltfs_pid" 2>/dev/null || true
+        exit 1
+    fi
+
+    sleep "$POLL_INTERVAL_SECONDS"
+    elapsed=$((elapsed + POLL_INTERVAL_SECONDS))
+done
+
+exit 1
