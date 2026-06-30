@@ -14,7 +14,7 @@ jobs:
     runs-on:
       - self-hosted
       - Linux
-      - nas
+      - homelab
     timeout-minutes: 15
 
     steps:
@@ -27,63 +27,64 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Versão: $V"
 
-      - name: Renderizar app de catálogo (ix-dev → trains)
+      - name: Empacotar app renderizado para envio ao NAS
         run: |
           set -euo pipefail
           VER="${{ steps.ver.outputs.version }}"
-          SRC="ix-dev/stable/lto6-tape"
-          DST="/tmp/lto6-catalog-deploy/trains/community/lto6-tape/$VER"
-          mkdir -p "$DST/templates/library"
+          STAGE="/tmp/lto6-catalog-stage"
+          DEST="$STAGE/trains/community/lto6-tape"
+          mkdir -p "$DEST/$VER/templates"
 
-          # Copia arquivos do catálogo
-          cp "$SRC/app.yaml"      "$DST/"
-          cp "$SRC/item.yaml"     "../item.yaml.tmp" 2>/dev/null || true
-          cp "$SRC/questions.yaml" "$DST/"
-          cp "$SRC/ix_values.yaml" "$DST/"
-          cp "$SRC/templates/docker-compose.yaml" "$DST/templates/"
-          [ -f "$SRC/CHANGELOG.md" ] && cp "$SRC/CHANGELOG.md" "$DST/README.md"
+          cp ix-dev/stable/lto6-tape/app.yaml       "$DEST/$VER/"
+          cp ix-dev/stable/lto6-tape/questions.yaml  "$DEST/$VER/"
+          cp ix-dev/stable/lto6-tape/ix_values.yaml  "$DEST/$VER/"
+          cp ix-dev/stable/lto6-tape/CHANGELOG.md    "$DEST/$VER/README.md"
+          cp ix-dev/stable/lto6-tape/templates/docker-compose.yaml "$DEST/$VER/templates/"
+          cp ix-dev/stable/lto6-tape/item.yaml       "$DEST/"
 
-          # app_versions.json (mínimo necessário para o catálogo)
-          cat > "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/app_versions.json" <<JSON
-          {
-            "$VER": {
-              "app_version": "$VER",
-              "healthy": true,
-              "train": "community"
-            }
-          }
-          JSON
+          python3 -c "
+          import json; v='$VER'
+          json.dump({v: {'app_version': v, 'healthy': True, 'train': 'community'}},
+                    open('$DEST/app_versions.json','w'), indent=2)
+          "
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+          echo "VER=$VER"     >> "$GITHUB_ENV"
+          find "$DEST" -type f
 
-          echo "Renderizado em $DST"
-          find "$DST" -type f
-
-      - name: Injetar no catálogo do TrueNAS e sincronizar
+      - name: Enviar ao NAS e injetar no catálogo
         run: |
           set -euo pipefail
-          VER="${{ steps.ver.outputs.version }}"
-          CATALOG="/mnt/.ix-apps/truenas_catalog"
+          # Transfere o pacote via homelab→NAS (padrão de deploy do projeto)
+          tar -C "$STAGE" -cf - trains | \
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=no homelab@192.168.15.2 \
+              "ssh -o BatchMode=yes -o StrictHostKeyChecking=no root@192.168.15.4 \
+               'mkdir -p /tmp/lto6-catalog-deploy && tar -xf - -C /tmp/lto6-catalog-deploy'"
 
-          # item.yaml fica um nível acima da versão
-          ITEM_DST="$CATALOG/trains/community/lto6-tape"
-          mkdir -p "$ITEM_DST"
-          cp "ix-dev/stable/lto6-tape/item.yaml" "$ITEM_DST/"
+          # Injetar no catálogo e sincronizar (comandos executados no NAS)
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no homelab@192.168.15.2 \
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no root@192.168.15.4 '
+              CATALOG=/mnt/.ix-apps/truenas_catalog
+              VER=$VER
+              SRC=/tmp/lto6-catalog-deploy/trains/community/lto6-tape
+              DEST=\$CATALOG/trains/community/lto6-tape
 
-          # Copia versão renderizada
-          cp -r "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/$VER" "$ITEM_DST/"
-          cp "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/app_versions.json" "$ITEM_DST/"
+              mkdir -p \$DEST/\$VER/templates
+              cp \$SRC/item.yaml            \$DEST/
+              cp \$SRC/app_versions.json    \$DEST/
+              cp -r \$SRC/\$VER/.           \$DEST/\$VER/
 
-          # Recarrega o catálogo na UI
-          midclt call catalog.sync 2>/dev/null || true
-          echo "Catálogo sincronizado — app lto6-tape $VER disponível em Discover → Community"
+              midclt call catalog.sync 2>/dev/null || true
+              echo \"Catálogo sincronizado — lto6-tape \$VER disponível em Discover\"
+            '"
 
       - name: Verificar app visível no catálogo
         run: |
-          sleep 10   # catalog.sync é assíncrono
-          midclt call catalog.apps 2>/dev/null \
-            | python3 -c "
-          import json,sys
-          apps = json.load(sys.stdin)
-          trains = apps.get('community', {})
-          found = 'lto6-tape' in trains
-          print('OK — lto6-tape visível no catálogo community' if found else 'AVISO — app ainda não indexado (pode demorar alguns segundos)')
-          " || echo "midclt catalog.apps não disponível neste runner"
+          sleep 12
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no homelab@192.168.15.2 \
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no root@192.168.15.4 \
+             'midclt call catalog.apps 2>/dev/null | python3 -c \"
+import json,sys
+d=json.load(sys.stdin)
+found=any(\"lto6-tape\" in str(v) for v in d.values())
+print(\"OK — lto6-tape visível\" if found else \"AVISO — ainda indexando\")
+\"'"
