@@ -1,0 +1,89 @@
+name: Deploy — Publish to NAS Catalog
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Control-Plane Image"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    name: Publicar app no catálogo local do TrueNAS
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on:
+      - self-hosted
+      - Linux
+      - nas
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ler versão do app
+        id: ver
+        run: |
+          V=$(grep -E '^version:' ix-dev/stable/lto6-tape/app.yaml | awk '{print $2}')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Versão: $V"
+
+      - name: Renderizar app de catálogo (ix-dev → trains)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          SRC="ix-dev/stable/lto6-tape"
+          DST="/tmp/lto6-catalog-deploy/trains/community/lto6-tape/$VER"
+          mkdir -p "$DST/templates/library"
+
+          # Copia arquivos do catálogo
+          cp "$SRC/app.yaml"      "$DST/"
+          cp "$SRC/item.yaml"     "../item.yaml.tmp" 2>/dev/null || true
+          cp "$SRC/questions.yaml" "$DST/"
+          cp "$SRC/ix_values.yaml" "$DST/"
+          cp "$SRC/templates/docker-compose.yaml" "$DST/templates/"
+          [ -f "$SRC/CHANGELOG.md" ] && cp "$SRC/CHANGELOG.md" "$DST/README.md"
+
+          # app_versions.json (mínimo necessário para o catálogo)
+          cat > "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/app_versions.json" <<JSON
+          {
+            "$VER": {
+              "app_version": "$VER",
+              "healthy": true,
+              "train": "community"
+            }
+          }
+          JSON
+
+          echo "Renderizado em $DST"
+          find "$DST" -type f
+
+      - name: Injetar no catálogo do TrueNAS e sincronizar
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          CATALOG="/mnt/.ix-apps/truenas_catalog"
+
+          # item.yaml fica um nível acima da versão
+          ITEM_DST="$CATALOG/trains/community/lto6-tape"
+          mkdir -p "$ITEM_DST"
+          cp "ix-dev/stable/lto6-tape/item.yaml" "$ITEM_DST/"
+
+          # Copia versão renderizada
+          cp -r "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/$VER" "$ITEM_DST/"
+          cp "/tmp/lto6-catalog-deploy/trains/community/lto6-tape/app_versions.json" "$ITEM_DST/"
+
+          # Recarrega o catálogo na UI
+          midclt call catalog.sync 2>/dev/null || true
+          echo "Catálogo sincronizado — app lto6-tape $VER disponível em Discover → Community"
+
+      - name: Verificar app visível no catálogo
+        run: |
+          sleep 10   # catalog.sync é assíncrono
+          midclt call catalog.apps 2>/dev/null \
+            | python3 -c "
+          import json,sys
+          apps = json.load(sys.stdin)
+          trains = apps.get('community', {})
+          found = 'lto6-tape' in trains
+          print('OK — lto6-tape visível no catálogo community' if found else 'AVISO — app ainda não indexado (pode demorar alguns segundos)')
+          " || echo "midclt catalog.apps não disponível neste runner"
