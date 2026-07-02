@@ -1,0 +1,57 @@
+name: Deploy Host Assets no NAS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "host-assets/**"
+      - ".github/workflows/deploy-host-assets.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    name: Sincronizar dataset persistente + bootstrap
+    runs-on:
+      - self-hosted
+      - Linux
+      - homelab
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sincronizar host-assets para o dataset persistente
+        run: |
+          set -euo pipefail
+          NAS="root@192.168.15.4"
+          DATASET="/mnt/tank/ltfs-tools"
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$NAS" \
+            "test -d $DATASET || { echo 'dataset ausente — rode zfs create tank/ltfs-tools + register primeiro'; exit 1; }"
+
+          # Scripts e orchestrator -> bin/
+          tar -C host-assets -cf - \
+            $(cd host-assets && ls *.py *.sh ltfs-fc-stable-start ltfs-lto6-stop lto6-resolve-device lto6b-resolve-device 2>/dev/null) \
+            | ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$NAS" \
+                "tar -xf - -C $DATASET/bin && chmod +x $DATASET/bin/*.sh $DATASET/bin/ltfs-fc-stable-start $DATASET/bin/ltfs-lto6-stop 2>/dev/null || true"
+
+          # Units + manifest -> systemd/
+          tar -C host-assets/systemd -cf - . \
+            | ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$NAS" \
+                "tar -xf - -C $DATASET/systemd"
+
+      - name: Executar bootstrap (instala units + boot-reconcile)
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no root@192.168.15.4 \
+            "/mnt/tank/ltfs-tools/bin/ltfs-persist-bootstrap.sh"
+
+      - name: Validar instalação
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=no root@192.168.15.4 '
+            python3 /var/db/ltfs-tools/ltfs_recovery.py --help >/dev/null
+            systemctl cat ltfs-boot-reconcile.service >/dev/null
+            systemctl is-enabled ltfs-boot-reconcile.service
+            midclt call initshutdownscript.query "[[\"comment\", \"~\", \"LTFS\"]]" | grep -q POSTINIT
+          '
