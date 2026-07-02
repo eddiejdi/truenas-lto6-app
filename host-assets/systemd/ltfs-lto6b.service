@@ -1,0 +1,23 @@
+[Unit]
+Description=LTFS mount for HP LTO-6b (TrueNAS Optiplex - segundo drive)
+After=local-fs.target ltfs-boot-reconcile.service
+Requires=local-fs.target
+Conflicts=tape-safe-eject.service ltfs-deep-recovery.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/ltfs-lto6b
+# Gate: so monta no boot se automount estiver habilitado e houver cartucho pronto
+ExecCondition=/bin/sh -c '[ "${LTFS_LTO6B_AUTOMOUNT:-false}" = "true" ] || { echo "LTFS_LTO6B_AUTOMOUNT!=true - mount manual apenas"; exit 1; }'
+ExecCondition=/bin/sh -c 'sg_turs "${LTFS_DEVICE:-/dev/sg2}" || sg_turs "${LTFS_DEVICE:-/dev/sg2}"'
+ExecStart=/usr/bin/python3 /var/db/ltfs-tools/ltfs_recovery.py --orchestrated-mount
+ExecStop=/usr/bin/python3 /var/db/ltfs-tools/ltfs_recovery.py --orchestrated-stop
+TimeoutStartSec=480
+TimeoutStopSec=120
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target

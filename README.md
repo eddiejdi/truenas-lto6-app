@@ -29,6 +29,35 @@ scripts/extract-host-assets.sh# reextração read-only do servidor
 .github/workflows/            # CI de render + build da imagem
 ```
 
+## Persistência a upgrades do TrueNAS (POSTINIT)
+
+Units e scripts instalados em `/etc/systemd/system` e `/var/db/ltfs-tools` vivem no
+boot environment — um upgrade do SCALE cria um BE novo e os descarta. A camada de
+persistência resolve isso:
+
+- **`host-assets/ltfs-persist-bootstrap.sh`** — bootstrap idempotente que reinstala
+  scripts/units/env a partir do dataset persistente `/mnt/tank/ltfs-tools`
+  (conforme `host-assets/systemd/units.manifest`) e roda `ltfs_recovery.py
+  --boot-reconcile` ao final (limpa locks stale, restaura units suspensas, alerta
+  cursores órfãos — nunca toca na fita).
+- **`host-assets/ltfs-truenas-register.sh`** — registra o bootstrap como POSTINIT via
+  `midclt call initshutdownscript.create`; o registro vive no config DB do TrueNAS,
+  que migra entre boot environments.
+- **`host-assets/ltfs-nfs-share.sh`** — export NFS do mount LTFS via API
+  `sharing.nfs.*` (convive com shares gerenciados; não sobrescreve `/etc/exports`).
+
+Setup único na NAS:
+
+```bash
+zfs create tank/ltfs-tools
+mkdir -p /mnt/tank/ltfs-tools/{bin,systemd,env,payload}
+# popular bin/ com host-assets/*.{sh,py} + scripts do runtime, systemd/ com units + manifest,
+# env/ com /etc/default/ltfs-*, payload/ com tar de /var/db/ltfs-patched
+/mnt/tank/ltfs-tools/bin/ltfs-truenas-register.sh
+```
+
+Aplicado na NAS em 2026-07-02 (initshutdownscript id=1); teste de upgrade simulado validado.
+
 ## Instalação
 
 ### Caminho 1 — Custom App (validação imediata)

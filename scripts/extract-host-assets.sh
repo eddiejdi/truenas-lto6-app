@@ -14,7 +14,8 @@ mkdir -p "$DST/systemd" "$DST/env"
 
 echo "== Extraindo tooling de $NAS (read-only) =="
 for f in ltfs_recovery.py ltfs-fc-stable-start ltfs-lto6-stop \
-         lto6-resolve-device lto6b-resolve-device tape_dual_recovery.py; do
+         lto6-resolve-device lto6b-resolve-device tape_dual_recovery.py \
+         ltfs-persist-bootstrap.sh ltfs-truenas-register.sh ltfs-nfs-share.sh; do
   ssh "$NAS" "cat /var/db/ltfs-tools/$f" > "$DST/$f" \
     && echo "  OK $f ($(wc -l < "$DST/$f") linhas)"
 done
@@ -35,7 +36,7 @@ echo "  limpo ✓"
 
 echo "== Copiando units versionados (do repo eddie-auto-dev) =="
 SRC_REPO="${SRC_REPO:-../eddie-auto-dev}"
-for u in ltfs-lto6.service ltfs-button-watch.service; do
+for u in ltfs-lto6.service ltfs-button-watch.service ltfs-boot-reconcile.service ltfs-lto6b.service; do
   [ -f "$SRC_REPO/systemd/$u" ] && cp "$SRC_REPO/systemd/$u" "$DST/systemd/" && echo "  OK $u"
 done
 [ -f "$SRC_REPO/tools/ltfs_button_watch.py" ] \

@@ -57,7 +57,9 @@ LTFS_TAPE_DEVICE = os.getenv("LTFS_TAPE_DEVICE", "/dev/nst0")
 LTFS_JOURNAL_LINES = int(os.getenv("LTFS_JOURNAL_LINES", "160"))
 LTFS_ORCH_LOCK = Path(os.getenv("LTFS_ORCH_LOCK", "/run/lock/ltfs-orchestrator.lock"))
 LTFS_ORCH_LOCK_WAIT_SECONDS = int(os.getenv("LTFS_ORCH_LOCK_WAIT_SECONDS", "0"))
-LTFS_SUSPEND_STATE_FILE = Path(os.getenv("LTFS_SUSPEND_STATE_FILE", "/run/ltfs-recovery/suspended-units.json"))
+LTFS_SUSPEND_STATE_FILE = Path(os.getenv("LTFS_SUSPEND_STATE_FILE", "/var/lib/ltfs/suspended-units.json"))
+# Caminho antigo em tmpfs — lido como fallback para reconciliar estado gravado por versões anteriores
+LTFS_SUSPEND_STATE_FILE_LEGACY = Path("/run/ltfs-recovery/suspended-units.json")
 LTFS_SUSPEND_MASK_TIMERS = os.getenv("LTFS_SUSPEND_MASK_TIMERS", "true").lower() in {"1", "true", "yes", "on"}
 LTFS_SELF_HEAL_STATE_FILE = Path(os.getenv("LTFS_SELF_HEAL_STATE_FILE", "/var/lib/ltfs/self_heal_state.json"))
 LTFS_SELF_HEAL_REMOUNT_COOLDOWN_SECONDS = int(os.getenv("LTFS_SELF_HEAL_REMOUNT_COOLDOWN_SECONDS", "300"))
@@ -77,7 +79,6 @@ LTFS_BIN = os.getenv("LTFS_BIN", "/var/db/ltfs-patched/bin/ltfs")
 LTFSCK_BIN = os.getenv("LTFSCK_BIN", "/var/db/ltfs-patched/bin/ltfsck")
 MKLTFS_BIN = os.getenv("MKLTFS_BIN", "/var/db/ltfs-patched/bin/mkltfs")
 LTFS_RO_RECOVERY_MOUNT = Path(os.getenv("LTFS_RO_RECOVERY_MOUNT", "/mnt/tape/lto6-ro-recovery"))
-LTFS_LOGFILE = Path(os.getenv("LTFS_LOGFILE", "/var/log/ltfs-lto6.log"))
 
 LTFS_CONFLICT_SERVICES = [
     item.strip()
@@ -368,23 +369,6 @@ def _ltfsck_xml_parse_error(result: Dict[str, Any]) -> bool:
     return any(p.lower() in combined.lower() for p in _XML_PARSE_ERROR_PATTERNS)
 
 
-def _is_eod_missing_in_mount_log(lines: int = 80) -> bool:
-    """Detecta EOD ausente no tail do log de mount LTFS — aciona recuperacao automatica via force_mount_no_eod."""
-    _eod_patterns = (
-        "EOD of IP(0) is missing",
-        "EOD of DP(1) is missing",
-        "deep recovery operation is required",
-        "LTFS17146E",
-        "LTFS17147E",
-    )
-    try:
-        content = LTFS_LOGFILE.read_text(errors="replace")
-        tail = "\n".join(content.splitlines()[-lines:]).lower()
-        return any(p.lower() in tail for p in _eod_patterns)
-    except OSError:
-        return False
-
-
 def _ltfsck_was_blocked(result: Dict[str, Any]) -> bool:
     """Retorna True se o ltfsck não chegou a rodar (bloqueado por device ocupado)."""
     cmd = result.get("details", {}).get("command_result", {})
@@ -576,13 +560,14 @@ def _write_suspension_state(payload: Dict[str, Any]) -> None:
 
 
 def _load_suspension_state() -> Dict[str, Any] | None:
-    try:
-        if not LTFS_SUSPEND_STATE_FILE.exists():
-            return None
-        return json.loads(LTFS_SUSPEND_STATE_FILE.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        LOGGER.warning("Falha ao ler estado de suspensão %s: %s", LTFS_SUSPEND_STATE_FILE, exc)
-        return None
+    for state_file in (LTFS_SUSPEND_STATE_FILE, LTFS_SUSPEND_STATE_FILE_LEGACY):
+        try:
+            if not state_file.exists():
+                continue
+            return json.loads(state_file.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("Falha ao ler estado de suspensão %s: %s", state_file, exc)
+    return None
 
 
 def _suspend_interfering_units(reason: str, units: list[str]) -> Dict[str, Any]:
@@ -656,10 +641,11 @@ def _resume_suspended_units(payload: Dict[str, Any] | None = None) -> Dict[str, 
             resume_record["start_result"] = _run_orchestration_command(["systemctl", "start", unit])
         resumed.append(resume_record)
 
-    try:
-        LTFS_SUSPEND_STATE_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    for state_file in (LTFS_SUSPEND_STATE_FILE, LTFS_SUSPEND_STATE_FILE_LEGACY):
+        try:
+            state_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     return {
         "resumed_units": resumed,        "started_services": [
@@ -1393,14 +1379,6 @@ def orchestrated_mount() -> Dict[str, Any]:
     _fc_start = os.environ.get("LTFS_FC_STABLE_START", "/var/db/ltfs-tools/ltfs-fc-stable-start")
     result = _run_orchestration_command([_fc_start], streaming=True)
     success = result["returncode"] == 0
-
-    # Primeira recuperacao automatica: EOD ausente -> tenta montar com ultima posicao valida
-    auto_ro_result: Dict[str, Any] = {}
-    if not success and _is_eod_missing_in_mount_log():
-        LOGGER.info("EOD ausente detectado no log de mount -- tentando force_mount_no_eod como primeira recuperacao")
-        auto_ro_result = force_mount_ro()
-        LOGGER.info("force_mount_no_eod: success=%s", auto_ro_result.get("success"))
-
     resume_info: Dict[str, Any] = {}
     if success:
         resume_info = {"resumed_background_units": _resume_suspended_units(service_actions)}
@@ -1436,7 +1414,7 @@ def orchestrated_mount() -> Dict[str, Any]:
     return _respond(
         success,
         "Operação 'mount' executada",
-        {"operation": "mount", "command_result": result, "cursor": cursor_info, "auto_ro_recovery": auto_ro_result, **service_actions, **resume_info},
+        {"operation": "mount", "command_result": result, "cursor": cursor_info, **service_actions, **resume_info},
     )
 
 
@@ -2602,6 +2580,107 @@ def reformat(volser: str) -> Dict[str, Any]:
     )
 
 
+LTFS_TEXTFILE_COLLECTOR_DIR = Path(
+    os.getenv("LTFS_TEXTFILE_COLLECTOR_DIR", "/var/lib/prometheus/node-exporter")
+)
+LTFS_RUNTIME_UNITS_DIR = Path(os.getenv("LTFS_RUNTIME_UNITS_DIR", "/run/systemd/system"))
+LTFS_EXTRA_LOCK_FILES = [
+    Path(item.strip())
+    for item in os.getenv(
+        "LTFS_EXTRA_LOCK_FILES",
+        "/run/lock/ltfs-tape-exclusive.lock,/run/lock/tape-access.lock",
+    ).split(",")
+    if item.strip()
+]
+
+
+def _write_reconcile_metrics(orphan_cursors: int, cleared_locks: int, resumed_units: int) -> None:
+    """Exporta métricas do boot-reconcile via node_exporter textfile collector."""
+    try:
+        LTFS_TEXTFILE_COLLECTOR_DIR.mkdir(parents=True, exist_ok=True)
+        prom = LTFS_TEXTFILE_COLLECTOR_DIR / "ltfs_boot_reconcile.prom"
+        tmp = prom.with_suffix(".prom.tmp")
+        tmp.write_text(
+            "# HELP ltfs_boot_reconcile_last_run_timestamp Unix timestamp da última reconciliação de boot\n"
+            "# TYPE ltfs_boot_reconcile_last_run_timestamp gauge\n"
+            f"ltfs_boot_reconcile_last_run_timestamp {int(time_module.time())}\n"
+            "# HELP ltfs_orphan_cursor_count Cursores de escrita órfãos aguardando decisão manual\n"
+            "# TYPE ltfs_orphan_cursor_count gauge\n"
+            f"ltfs_orphan_cursor_count {orphan_cursors}\n"
+            "# HELP ltfs_boot_reconcile_cleared_locks Locks stale removidos na reconciliação\n"
+            "# TYPE ltfs_boot_reconcile_cleared_locks gauge\n"
+            f"ltfs_boot_reconcile_cleared_locks {cleared_locks}\n"
+            "# HELP ltfs_boot_reconcile_resumed_units Units restauradas na reconciliação\n"
+            "# TYPE ltfs_boot_reconcile_resumed_units gauge\n"
+            f"ltfs_boot_reconcile_resumed_units {resumed_units}\n"
+        )
+        tmp.rename(prom)
+    except OSError as exc:
+        LOGGER.warning("Falha ao escrever métricas de reconcile: %s", exc)
+
+
+def boot_reconcile() -> Dict[str, Any]:
+    """Reconcilia estado do orchestrator após boot ou operação interrompida.
+
+    Seguro por construção: nunca toca a fita. Apenas:
+    1. Remove lockfiles cujo PID dono está morto
+    2. Restaura units suspensas registradas no state file (novo caminho
+       persistente em /var/lib/ltfs ou legado em /run)
+    3. Desmascara máscaras --runtime residuais do serviço LTFS e escalator
+    4. Detecta cursores de escrita órfãos e ALERTA (Telegram) sem agir
+    """
+    escalator = os.getenv("LTFS_SELFHEAL_ESCALATOR_SERVICE", "ltfs-lto6-selfheal-escalator.service")
+
+    # 1. Locks stale
+    lock_paths = [LTFS_ORCH_LOCK, *LTFS_EXTRA_LOCK_FILES]
+    cleared_locks = []
+    for lock_path in lock_paths:
+        existed = lock_path.exists()
+        _clear_stale_lock(lock_path)
+        if existed and not lock_path.exists():
+            cleared_locks.append(str(lock_path))
+
+    # 2. Units suspensas por operação interrompida
+    resume_result = _resume_suspended_units(None)
+    resumed_units = resume_result.get("resumed_units", [])
+
+    # 3. Máscaras runtime residuais (deixadas por _stop_ltfs_service_loop interrompido)
+    unmask_results = []
+    reconcile_units = {LTFS_SERVICE, escalator, *(u for u in LTFS_CONFLICT_SERVICES if u.endswith(".timer"))}
+    for unit in sorted(reconcile_units):
+        mask_link = LTFS_RUNTIME_UNITS_DIR / unit
+        if mask_link.is_symlink() and str(mask_link.resolve()) == "/dev/null":
+            unmask_results.append(
+                {"unit": unit, "result": _run_orchestration_command(["systemctl", "unmask", "--runtime", unit])}
+            )
+    if unmask_results:
+        _run_orchestration_command(["systemctl", "daemon-reload"])
+
+    # 4. Cursores órfãos — só alerta, decisão de recovery é humana
+    orphan_cursors = _list_recovery_cursors()
+    if orphan_cursors:
+        volsers = ", ".join(str(c.get("volser")) for c in orphan_cursors)
+        _telegram_send(
+            f"⚠️ LTFS boot-reconcile: {len(orphan_cursors)} cursor(es) de escrita órfão(s) "
+            f"detectado(s) ({volsers}). Sessão de gravação foi interrompida — avalie "
+            f"`--cursor-recover` manualmente. Nenhuma ação automática foi tomada."
+        )
+
+    _write_reconcile_metrics(len(orphan_cursors), len(cleared_locks), len(resumed_units))
+
+    return _respond(
+        True,
+        "Reconciliação de boot concluída",
+        {
+            "operation": "boot-reconcile",
+            "cleared_locks": cleared_locks,
+            "resumed_units": resumed_units,
+            "unmasked_units": unmask_results,
+            "orphan_cursors": orphan_cursors,
+        },
+    )
+
+
 def run_mode(mode: str, volser: str = "", file_path: str = "", block: int | None = None, session_id: str | None = None) -> Dict[str, Any]:
     if mode == "check":
         return check_catalog()
@@ -2627,6 +2706,8 @@ def run_mode(mode: str, volser: str = "", file_path: str = "", block: int | None
         if not volser:
             return _respond(False, "--reformat requer --volser VOLSER")
         return reformat(volser=volser)
+    if mode == "boot-reconcile":
+        return boot_reconcile()
     if mode == "orchestrated-mount":
         return orchestrated_mount()
     if mode == "orchestrated-stop":
@@ -2684,6 +2765,8 @@ def main() -> None:
                        help="Repara label ANSI corrompido (<80 bytes) na partição 1 via LOCATE(10)+WRITE(6); requer --volser se não detectável")
     group.add_argument("--repair-partition1-ltfs-label", action="store_true",
                        help="Restaura bloco LTFS label XML na partição 1 copiando da partição 0 (usar após --repair-partition1-label)")
+    group.add_argument("--boot-reconcile", action="store_true",
+                       help="Reconcilia estado pós-boot: locks stale, units suspensas/mascaradas e alerta de cursores órfãos — nunca toca a fita")
     group.add_argument("--orchestrated-mount", action="store_true", help="Monta LTFS com lock exclusivo e bloqueio de concorrentes")
     group.add_argument("--orchestrated-stop", action="store_true", help="Desmonta LTFS com lock exclusivo")
     group.add_argument("--deep-recovery", action="store_true", help="Executa ltfsck --deep-recovery com lock exclusivo")

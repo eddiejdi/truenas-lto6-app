@@ -1,0 +1,18 @@
+[Unit]
+Description=LTFS boot reconciliation - restaura units/locks apos queda ou reboot no meio de operacao
+Documentation=file:///workspace/eddie-auto-dev/docs/ltfs-emergency-runbook.md
+# Roda antes do mount e do resume de drain para entregar um systemd limpo a eles
+Before=ltfs-lto6.service lto6-checkpoint-recover.service
+After=zfs-mount.service local-fs.target
+Wants=zfs-mount.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/ltfs-lto6
+ExecStart=/usr/bin/python3 /var/db/ltfs-tools/ltfs_recovery.py --boot-reconcile
+TimeoutStartSec=120
+# Reconcile nunca toca a fita; falha aqui nao deve impedir o boot do resto
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target
