@@ -1,0 +1,8 @@
+# Units instaladas pelo ltfs-persist-bootstrap.sh a partir de /mnt/tank/ltfs-tools/systemd/
+# Formato: <unit> [enable]
+ltfs-boot-reconcile.service enable
+ltfs-lto6.service enable
+ltfs-lto6b.service enable
+ltfs-lto6-selfheal-escalator.service
+ltfs-deep-recovery.service
+lto6-selfheal.service
